@@ -1,7 +1,5 @@
 # PAGE XML to ALTO XML converter
 
-# page_to_alto.py
-
 Converts [PAGE XML](http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15) files exported from Transkribus into [ALTO XML v3](http://www.loc.gov/standards/alto/ns-v3#). Multiple PAGE files belonging to the same document are merged into a single ALTO file by default.
 
 ## Requirements
