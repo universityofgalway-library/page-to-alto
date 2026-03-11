@@ -164,74 +164,6 @@ def extract_page_metadata(page_root: ET.Element) -> dict:
     result['creator']     = _text('Creator')
     result['created']     = _text('Created')
     result['last_change'] = _text('LastChange')
-    result['comments']    = _text('Comments')
-
-    # Parse the colon-separated key=value pairs in <Creator>
-    # e.g. prov=READ-COOP:name=PyLaia@TranskribusPlatform:version=2.3.0:...
-    if result['creator']:
-        pairs = {}
-        for part in result['creator'].split(':'):
-            if '=' in part:
-                k, _, v = part.partition('=')
-                pairs[k.strip()] = v.strip()
-        result['sw_name']    = pairs.get('name')
-        result['sw_version'] = pairs.get('version')
-
-    return result
-
-
-def create_alto_tags() -> ET.Element:
-    """
-    Create the ALTO <Tags> section declaring LayoutTags for all region types.
-
-    These fixed IDs (TAG_TABLE, TAG_IMAGE, TAG_SEPARATOR, TAG_TEXT) are
-    referenced via TAGREFS on every layout element produced by this script.
-    """
-    tags = ET.Element('Tags')
-    ET.SubElement(tags, 'LayoutTag', ID=TAG_TEXT,      LABEL='Text')
-    ET.SubElement(tags, 'LayoutTag', ID=TAG_TABLE,     LABEL='Table')
-    ET.SubElement(tags, 'LayoutTag', ID=TAG_IMAGE,     LABEL='Figure')
-    ET.SubElement(tags, 'LayoutTag', ID=TAG_SEPARATOR, LABEL='Separator')
-    return tags
-
-
-def extract_page_metadata(page_root: ET.Element) -> dict:
-    """
-    Extract metadata from a PAGE XML root element.
-
-    Parses the <Metadata> block and returns a plain dict with the
-    following keys (all optional, value is None when absent):
-
-        creator     – raw <Creator> string
-                      e.g. 'prov=READ-COOP:name=PyLaia@TranskribusPlatform:version=2.3.0:...'
-        sw_name     – software name parsed from creator  (e.g. 'PyLaia@TranskribusPlatform')
-        sw_version  – version string parsed from creator (e.g. '2.3.0')
-        created     – <Created> ISO-8601 timestamp string
-        last_change – <LastChange> ISO-8601 timestamp string
-        comments    – <Comments> text (stripped)
-    """
-    ns = {'pc': 'http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15'}
-    meta = page_root.find('pc:Metadata', ns)
-
-    result = {
-        'creator': None,
-        'sw_name': None,
-        'sw_version': None,
-        'created': None,
-        'last_change': None,
-        'comments': None,
-    }
-
-    if meta is None:
-        return result
-
-    def _text(tag: str) -> str | None:
-        el = meta.find(f'pc:{tag}', ns)
-        return el.text.strip() if el is not None and el.text else None
-
-    result['creator']     = _text('Creator')
-    result['created']     = _text('Created')
-    result['last_change'] = _text('LastChange')
 
     # Parse the colon-separated key=value pairs in <Creator>
     # e.g. prov=READ-COOP:name=PyLaia@TranskribusPlatform:version=2.3.0:...
@@ -298,6 +230,21 @@ def create_alto_header(metadata: dict | None = None) -> ET.Element:
     return description
 
 
+def create_alto_tags() -> ET.Element:
+    """
+    Create the ALTO <Tags> section declaring LayoutTags for all region types.
+
+    These fixed IDs (TAG_TABLE, TAG_IMAGE, TAG_SEPARATOR, TAG_TEXT) are
+    referenced via TAGREFS on every layout element produced by this script.
+    """
+    tags = ET.Element('Tags')
+    ET.SubElement(tags, 'LayoutTag', ID=TAG_TEXT,      LABEL='Text')
+    ET.SubElement(tags, 'LayoutTag', ID=TAG_TABLE,     LABEL='Table')
+    ET.SubElement(tags, 'LayoutTag', ID=TAG_IMAGE,     LABEL='Figure')
+    ET.SubElement(tags, 'LayoutTag', ID=TAG_SEPARATOR, LABEL='Separator')
+    return tags
+
+
 def make_id(page_prefix: str, source_id: str) -> str:
     """
     Build a globally unique ALTO ID by combining the page prefix with
@@ -342,18 +289,23 @@ def convert_textline(line_elem: ET.Element, ns: dict,
                           WIDTH=str(width),
                           HEIGHT=str(height))
 
-    # Process words
+    # Process words.
+    # Bounding boxes are pre-computed so that each <SP> width can be derived
+    # from the gap between adjacent words: next_word.HPOS - (this_word.HPOS + WIDTH).
+    # A <SP> is omitted when the gap is zero or negative (overlapping/misordered boxes).
     words = line_elem.findall('pc:Word', ns)
+    word_boxes: list[tuple[int, int, int, int]] = []
+    for word_elem in words:
+        word_coords = word_elem.find('pc:Coords', ns)
+        if word_coords is not None:
+            word_boxes.append(convert_coords(word_coords.get('points', '')))
+        else:
+            word_boxes.append((0, 0, 0, 0))
+
     for word_idx, word_elem in enumerate(words):
         src_word_id = word_elem.get('id', f'{src_line_id}_w{word_idx}')
         word_id = make_id(page_prefix, src_word_id)
-
-        word_coords = word_elem.find('pc:Coords', ns)
-        if word_coords is not None:
-            w_hpos, w_vpos, w_width, w_height = convert_coords(
-                word_coords.get('points', ''))
-        else:
-            w_hpos, w_vpos, w_width, w_height = 0, 0, 0, 0
+        w_hpos, w_vpos, w_width, w_height = word_boxes[word_idx]
 
         # Get word text and optional per-word confidence from PAGE TextEquiv
         text_equiv_elem = word_elem.find('pc:TextEquiv', ns)
@@ -378,12 +330,16 @@ def convert_textline(line_elem: ET.Element, ns: dict,
 
         ET.SubElement(textline, 'String', **string_attribs)
 
-        # Add space after word (except last word)
+        # Emit <SP> between words. Width = gap between this word's right edge and
+        # the next word's left edge. Omit if zero or negative (overlapping boxes).
         if word_idx < len(words) - 1:
-            ET.SubElement(textline, 'SP',
-                          WIDTH='10',
-                          VPOS=str(w_vpos),
-                          HPOS=str(w_hpos + w_width))
+            sp_hpos = w_hpos + w_width
+            sp_width = word_boxes[word_idx + 1][0] - sp_hpos
+            if sp_width > 0:
+                ET.SubElement(textline, 'SP',
+                              WIDTH=str(sp_width),
+                              VPOS=str(w_vpos),
+                              HPOS=str(sp_hpos))
 
     return textline
 

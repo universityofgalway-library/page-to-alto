@@ -103,3 +103,7 @@ A conversion note is always appended to `processingStepDescription`:
 > Automatically converted from PAGE XML (http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15) by the University of Galway Library.
 
 For merged multi-page documents, provenance metadata is taken from the first page only.
+
+## Known limitation
+
+Inter-word spacing (`<SP>`) uses a fixed width of 10px. Actual gaps could be computed from adjacent word bounding boxes but are not.
