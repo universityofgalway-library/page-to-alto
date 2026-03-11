@@ -52,7 +52,7 @@ All four PAGE region types are converted. Non-text regions are identified by `TA
 | `<TextLine>` | `<TextLine>` (coordinates from `<Baseline>` if present, else `<Coords>`) | — |
 | `<Word>` | `<String>` | — |
 | `<TextEquiv conf="...">` | `<String WC="...">` (omitted if no confidence value in source) | — |
-| Inter-word spacing | `<SP>` (10px fixed width) | — |
+| Inter-word spacing | `<SP>` (calculated automatically from the coordinates of neighbouring words) | — |
 
 ### Tables
 
